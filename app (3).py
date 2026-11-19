@@ -1,5 +1,4 @@
 import re
-from io import BytesIO
 from pathlib import Path
 
 import pandas as pd
@@ -12,28 +11,29 @@ st.set_page_config(page_title="Seoul Subway Insight", page_icon="🚇", layout="
 st.title("🚇 Seoul Subway Insight")
 st.caption("서울 지하철 역별 · 시간대별 승하차 인원 분석 대시보드")
 
-DATA_PATH = Path(__file__).parent / "data" / "subway_ridership.csv"
+BASE_DIR = Path(__file__).parent
+CANDIDATE_PATHS = [
+    BASE_DIR / "data" / "subway_ridership.csv",
+    BASE_DIR / "subway_ridership.csv",
+    BASE_DIR / "subway_data.csv",
+    BASE_DIR / "subway_2025_2026.csv",
+]
 
 
-@st.cache_data(show_spinner="데이터를 불러오는 중입니다...")
-def load_csv(file_bytes=None):
-    """프로젝트 기본 CSV 또는 업로드한 CSV를 읽고 분석용 열을 생성합니다."""
-    if file_bytes is None:
-        path = DATA_PATH
-        if not path.exists():
-            raise FileNotFoundError(
-                "data/subway_ridership.csv 파일이 없습니다. GitHub에 data 폴더도 함께 올려주세요."
-            )
-        # The bundled compact CSV is saved as UTF-8 with BOM.
-        try:
-            data = pd.read_csv(path, encoding="utf-8-sig", low_memory=False)
-        except UnicodeDecodeError:
-            data = pd.read_csv(path, encoding="cp949", low_memory=False)
-    else:
-        try:
-            data = pd.read_csv(BytesIO(file_bytes), encoding="utf-8-sig", low_memory=False)
-        except UnicodeDecodeError:
-            data = pd.read_csv(BytesIO(file_bytes), encoding="cp949", low_memory=False)
+@st.cache_data(show_spinner="데이터를 자동으로 불러오는 중입니다...")
+def load_csv():
+    """저장소 내 기본 CSV 파일을 자동으로 찾아 읽고 분석용 열을 생성합니다."""
+    path = next((p for p in CANDIDATE_PATHS if p.exists()), None)
+    if path is None:
+        raise FileNotFoundError(
+            "기본 CSV 파일(data/subway_ridership.csv 또는 subway_ridership.csv)을 찾지 못했습니다. "
+            "app.py와 같은 폴더나 data 폴더에 CSV 파일을 올려주세요."
+        )
+
+    try:
+        data = pd.read_csv(path, encoding="utf-8-sig", low_memory=False)
+    except UnicodeDecodeError:
+        data = pd.read_csv(path, encoding="cp949", low_memory=False)
 
     data.columns = data.columns.astype(str).str.strip()
     required = {"사용월", "호선명", "지하철역"}
@@ -62,7 +62,6 @@ def load_csv(file_bytes=None):
     if not entry_cols or not exit_cols:
         raise ValueError("시간대별 승차·하차 인원 열을 찾지 못했습니다.")
 
-    # Use the source column sequence to pair the same hourly intervals.
     time_labels = [c.replace(" 승차인원", "") for c in entry_cols]
     for col in entry_cols + exit_cols:
         data[col] = pd.to_numeric(data[col], errors="coerce").fillna(0)
@@ -71,7 +70,7 @@ def load_csv(file_bytes=None):
     data["총하차"] = data[exit_cols].sum(axis=1)
     data["총이용"] = data["총승차"] + data["총하차"]
     data["연도"] = data["연월"].dt.year
-    return data, entry_cols, exit_cols, time_labels
+    return data, entry_cols, exit_cols, time_labels, path.name
 
 
 def hourly_summary(data, entry_cols, exit_cols, labels):
@@ -86,17 +85,10 @@ def hourly_summary(data, entry_cols, exit_cols, labels):
 
 
 st.sidebar.header("분석 조건")
-uploaded = st.sidebar.file_uploader(
-    "다른 지하철 CSV 사용하기 (선택)", type=["csv"]
-)
 
 try:
-    if uploaded is not None:
-        df, entry_cols, exit_cols, time_labels = load_csv(uploaded.getvalue())
-        st.sidebar.success("업로드한 CSV를 사용 중입니다.")
-    else:
-        df, entry_cols, exit_cols, time_labels = load_csv()
-        st.sidebar.info("기본 데이터: 최근 12개월")
+    df, entry_cols, exit_cols, time_labels, loaded_filename = load_csv()
+    st.sidebar.success(f"자동 로드 완료: `{loaded_filename}`")
 except Exception as exc:
     st.error(f"데이터를 불러오지 못했습니다: {exc}")
     st.stop()
